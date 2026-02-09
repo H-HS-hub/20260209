@@ -2,183 +2,277 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>AI 風水羅盤 (MVP原型)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>風水篩選器</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Microsoft JhengHei', sans-serif; color: #0f0; }
-        video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; opacity: 0.6; }
-        #hud { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Microsoft JhengHei', sans-serif; }
         
-        /* 介面層 */
-        #ui-layer { position: absolute; bottom: 0; left: 0; width: 100%; height: 300px; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding-bottom: 20px; background: linear-gradient(to top, rgba(0,0,0,0.9), transparent); }
-        
-        .status-bar { position: absolute; top: 20px; left: 0; width: 100%; text-align: center; font-size: 1.2rem; text-shadow: 0 0 5px #000; }
-        .compass-deg { font-size: 3rem; font-weight: bold; color: #fff; }
-        .compass-text { font-size: 1.5rem; color: #0ff; margin-bottom: 10px;}
+        /* 影像層 */
+        #video-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; }
 
-        .btn-group { display: flex; gap: 10px; margin-bottom: 10px; }
-        button { background: rgba(0, 255, 0, 0.2); border: 2px solid #0f0; color: #0f0; padding: 15px 20px; font-size: 1rem; border-radius: 8px; cursor: pointer; backdrop-filter: blur(5px); }
-        button:active { background: #0f0; color: #000; }
-        button.danger { border-color: #f00; color: #f00; background: rgba(255, 0, 0, 0.2); }
+        /* UI 層 */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
         
-        #console { position: absolute; top: 100px; left: 10px; right: 10px; color: yellow; font-size: 0.9rem; pointer-events: none; white-space: pre-wrap; text-shadow: 1px 1px 0 #000; }
+        /* 頂部資訊 */
+        .top-bar { 
+            background: linear-gradient(to bottom, rgba(0,0,0,0.9), transparent); 
+            padding: 15px; text-align: center; color: #0f0; text-shadow: 0 0 5px #0f0;
+        }
+        .compass-val { font-size: 3rem; font-weight: bold; }
+        .compass-label { font-size: 1.2rem; color: #fff; }
         
-        /* 掃描框框動畫 */
-        .scanner { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 250px; height: 250px; border: 2px dashed rgba(0,255,255,0.5); border-radius: 20px; z-index: 2; pointer-events: none; }
-        .crosshair { position: absolute; top: 50%; left: 50%; width: 20px; height: 20px; border-left: 2px solid #0f0; border-top: 2px solid #0f0; transform: translate(-50%, -50%); }
+        /* 底部控制與狀態 */
+        .bottom-bar { 
+            background: linear-gradient(to top, rgba(0,0,0,0.9), transparent); 
+            padding: 20px; pointer-events: auto; text-align: center;
+        }
+        
+        button { 
+            background: #0f0; color: #000; border: none; padding: 15px 30px; 
+            font-size: 1.2rem; font-weight: bold; border-radius: 30px; 
+            box-shadow: 0 0 15px #0f0; cursor: pointer; transition: 0.3s;
+        }
+        button:active { transform: scale(0.95); }
+        button:disabled { background: #555; color: #aaa; box-shadow: none; }
+
+        .status-msg { color: #0ff; margin-bottom: 10px; font-size: 0.9rem; }
+        
+        /* 風水警告彈窗 */
+        #alert-box {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(255, 0, 0, 0.8); color: white; padding: 20px;
+            border-radius: 10px; text-align: center; display: none; z-index: 20;
+            border: 2px solid #fff; box-shadow: 0 0 20px red; pointer-events: none;
+        }
+        .safe-box { background: rgba(0, 255, 0, 0.8) !important; box-shadow: 0 0 20px green !important; }
     </style>
 </head>
 <body>
 
-    <video id="video" autoplay playsinline></video>
-    
-    <div class="scanner"><div class="crosshair"></div></div>
+    <div id="video-container">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+    </div>
 
-    <div id="hud">
-        <div class="status-bar">
-            <div class="compass-deg" id="degreeDisplay">0°</div>
-            <div class="compass-text" id="directionDisplay">北</div>
-        </div>
-        <div id="console">等待校正... 請點擊下方按鈕開始</div>
+    <div id="alert-box">
+        <h2 id="alert-title">煞氣偵測</h2>
+        <p id="alert-desc">內容...</p>
     </div>
 
     <div id="ui-layer">
-        <div class="btn-group">
-            <button onclick="startCompass()">1. 啟動羅盤</button>
+        <div class="top-bar">
+            <div class="compass-val" id="deg">0°</div>
+            <div class="compass-label" id="dir">等待校正</div>
+            <div style="font-size: 0.8rem; margin-top:5px; color:#aaa;">AI 狀態: <span id="ai-status">載入中...</span></div>
         </div>
-        <div class="btn-group">
-            <button onclick="setFacing()">2. 鎖定「向」</button>
-        </div>
-        <div class="btn-group">
-            <button class="danger" onclick="markTarget('kitchen')">標記廚房 (模擬AI)</button>
-            <button class="danger" onclick="markTarget('toilet')">標記廁所 (模擬AI)</button>
+
+        <div class="bottom-bar">
+            <div class="status-msg" id="status-text">請點擊按鈕啟動系統</div>
+            <button id="btn-start" onclick="initApp()">👉 啟動 AI 風水師</button>
+            
+            <div style="margin-top:15px; display:flex; align-items:center; gap:10px; color:#aaa; font-size:0.8rem;">
+                <span>羅盤校正:</span>
+                <input type="range" min="-180" max="180" value="0" style="flex:1;" oninput="updateOffset(this.value)">
+            </div>
         </div>
     </div>
 
     <script>
+        let model = null;
+        let isDetecting = false;
         let currentHeading = 0;
-        let houseFacing = null; // 房屋的向
-        let houseSitting = null; // 房屋的坐
-        
-        // 啟動攝影機
-        async function initCamera() {
+        let offset = 0;
+        let lastAlertTime = 0; // 避免警告一直跳
+
+        // 1. 初始化系統
+        async function initApp() {
+            const btn = document.getElementById('btn-start');
+            btn.disabled = true;
+            btn.innerText = "系統啟動中...";
+
+            // A. 啟動相機
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-                document.getElementById('video').srcObject = stream;
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment' }, 
+                    audio: false 
+                });
+                const video = document.getElementById('video');
+                video.srcObject = stream;
+                
+                // 等待影像載入完成再設定 Canvas 尺寸
+                video.onloadedmetadata = () => {
+                    video.play();
+                    resizeCanvas();
+                };
             } catch (err) {
-                log("無法啟動相機 (請確保使用 HTTPS 或 localhost)");
-            }
-        }
-
-        // 啟動羅盤 (iOS 需要授權)
-        function startCompass() {
-            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission()
-                    .then(response => {
-                        if (response == 'granted') {
-                            window.addEventListener('deviceorientation', handleOrientation);
-                            initCamera();
-                            log("羅盤已啟動，請站在房屋中心點。");
-                        }
-                    })
-                    .catch(console.error);
-            } else {
-                window.addEventListener('deviceorientation', handleOrientation);
-                initCamera();
-                log("羅盤已啟動 (Android/PC)。");
-            }
-        }
-
-        // 處理方位角數據
-        function handleOrientation(event) {
-            let heading = event.alpha; // Android 預設
-            
-            // iOS 處理
-            if(event.webkitCompassHeading) {
-                heading = event.webkitCompassHeading;
-            }
-            
-            // 簡單平滑處理
-            if(heading) currentHeading = Math.round(heading);
-            
-            updateDisplay();
-        }
-
-        function updateDisplay() {
-            document.getElementById('degreeDisplay').innerText = currentHeading + "°";
-            document.getElementById('directionDisplay').innerText = getDirectionLabel(currentHeading);
-        }
-
-        // 將角度轉為八卦方位
-        function getDirectionLabel(deg) {
-            const sectors = ['北(坎)', '東北(艮)', '東(震)', '東南(巽)', '南(離)', '西南(坤)', '西(兌)', '西北(乾)'];
-            // 每個方位 45 度，北是 337.5 ~ 22.5
-            let index = Math.round(deg / 45) % 8;
-            return sectors[index];
-        }
-
-        // --- 風水核心邏輯區 ---
-
-        function log(msg) {
-            document.getElementById('console').innerText += "\n> " + msg;
-            // 保持捲動在最下方
-            const c = document.getElementById('console');
-            if(c.innerText.length > 500) c.innerText = c.innerText.substring(c.innerText.length - 500);
-        }
-
-        // 步驟 2: 鎖定坐向
-        function setFacing() {
-            houseFacing = currentHeading;
-            houseSitting = (currentHeading + 180) % 360;
-            
-            let sitLabel = getDirectionLabel(houseSitting);
-            let faceLabel = getDirectionLabel(houseFacing);
-            
-            document.getElementById('console').innerText = ""; // 清空
-            log(`已鎖定房屋格局！\n坐：${sitLabel} | 向：${faceLabel}\n坐方角度：${houseSitting}°`);
-            log("請原地轉身，將鏡頭對準廚房或廁所...");
-        }
-
-        // 步驟 3: 標記目標 (模擬 AI 識別後的動作)
-        function markTarget(type) {
-            if (houseFacing === null) {
-                log("錯誤：請先鎖定房屋坐向！");
+                alert("相機啟動失敗: " + err);
                 return;
             }
 
-            let targetDeg = currentHeading;
-            let diagnosis = "";
-            let isBad = false;
+            // B. 啟動羅盤
+            setupCompass();
 
-            if (type === 'kitchen') {
-                // 邏輯：火燒天門 (西北方 292.5 - 337.5)
-                if (targetDeg >= 292.5 && targetDeg <= 337.5) {
-                    diagnosis = "⚠️ 警告：火燒天門！廚房位於西北方(乾宮)，火剋金。";
-                    isBad = true;
-                } else {
-                    diagnosis = "✅ 廚房位置尚可。";
-                }
-            } else if (type === 'toilet') {
-                // 邏輯：鬼門 (東北 22.5-67.5 或 西南 202.5-247.5)
-                if ((targetDeg >= 22.5 && targetDeg <= 67.5) || (targetDeg >= 202.5 && targetDeg <= 247.5)) {
-                    diagnosis = "⚠️ 警告：鬼門廁！廁所位於東北或西南方，聚陰氣。";
-                    isBad = true;
-                } else {
-                    diagnosis = "✅ 廁所位置尚可。";
-                }
+            // C. 載入 AI 模型
+            document.getElementById('ai-status').innerText = "下載模型中 (約 10MB)...";
+            try {
+                model = await cocoSsd.load();
+                document.getElementById('ai-status').innerText = "✅ AI 運作中";
+                btn.style.display = 'none'; // 隱藏按鈕
+                document.getElementById('status-text').innerText = "請將鏡頭對準：馬桶、瓦斯爐、床";
                 
-                // 額外檢查：廁所是否在房屋中心 (假設誤差範圍，例如無法精確測距，暫不判定)
-            }
-
-            log(`[偵測] ${type === 'kitchen' ? '廚房' : '廁所'} @ ${targetDeg}° (${getDirectionLabel(targetDeg)})`);
-            log(diagnosis);
-            
-            if(isBad) {
-                // 視覺回饋：閃爍紅色
-                document.body.style.backgroundColor = 'red';
-                setTimeout(() => document.body.style.backgroundColor = 'black', 200);
+                // 開始偵測迴圈
+                detectFrame();
+            } catch (err) {
+                alert("模型載入失敗: " + err);
+                document.getElementById('ai-status').innerText = "❌ 模型錯誤";
             }
         }
+
+        // 2. 羅盤設定 (整合版)
+        function setupCompass() {
+            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(r => { if (r === 'granted') window.addEventListener('deviceorientation', handleOrientation); })
+                    .catch(console.error);
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation);
+            }
+        }
+
+        function handleOrientation(e) {
+            let h = e.webkitCompassHeading || (e.alpha ? 360 - e.alpha : 0);
+            // 簡單平滑與校正
+            currentHeading = (h + offset + 360) % 360;
+            
+            document.getElementById('deg').innerText = Math.round(currentHeading) + "°";
+            document.getElementById('dir').innerText = getDirLabel(currentHeading);
+        }
+
+        function updateOffset(val) { offset = parseInt(val); }
+
+        function getDirLabel(deg) {
+            const dirs = ['北(坎)', '東北(艮)', '東(震)', '東南(巽)', '南(離)', '西南(坤)', '西(兌)', '西北(乾)'];
+            return dirs[Math.round(deg / 45) % 8];
+        }
+
+        // 3. AI 偵測迴圈
+        async function detectFrame() {
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+
+            if (video.readyState === 4) { // 確認影像可用
+                const predictions = await model.detect(video);
+                
+                // 清空畫布
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                predictions.forEach(prediction => {
+                    // 只過濾我們感興趣的風水物件
+                    const type = checkFengShuiObject(prediction.class);
+                    
+                    if (type && prediction.score > 0.6) {
+                        // 畫框框
+                        const [x, y, width, height] = prediction.bbox;
+                        ctx.strokeStyle = type.color;
+                        ctx.lineWidth = 4;
+                        ctx.strokeRect(x, y, width, height);
+
+                        // 畫文字
+                        ctx.fillStyle = type.color;
+                        ctx.font = '18px Arial';
+                        ctx.fillText(`${type.label} (${Math.round(prediction.score*100)}%)`, x, y > 10 ? y - 5 : 10);
+
+                        // 觸發風水判斷
+                        checkFengShuiLogic(type.key);
+                    }
+                });
+            }
+            requestAnimationFrame(detectFrame);
+        }
+
+        // 4. 定義風水物件與顏色
+        function checkFengShuiObject(className) {
+            // COCO-SSD 的類別名稱映射
+            const map = {
+                'toilet': { key: 'toilet', label: '🚽 馬桶 (穢氣)', color: '#FF00FF' }, // 洋紅色
+                'microwave': { key: 'kitchen', label: '🔥 廚房 (火氣)', color: '#FF4500' }, // 橘紅色
+                'oven': { key: 'kitchen', label: '🔥 廚房 (火氣)', color: '#FF4500' },
+                'refrigerator': { key: 'kitchen', label: '🔥 廚房 (財庫)', color: '#FF4500' },
+                'sink': { key: 'kitchen', label: '💧 水槽 (水氣)', color: '#00FFFF' },
+                'bed': { key: 'bed', label: '🛏️ 臥室 (安神)', color: '#00FF00' }, // 綠色
+                'couch': { key: 'bed', label: '🛋️ 沙發 (休息)', color: '#00FF00' } // 把沙發也視為休息區
+            };
+            return map[className] || null;
+        }
+
+        // 5. 風水吉凶邏輯核心
+        function checkFengShuiLogic(objKey) {
+            const now = Date.now();
+            if (now - lastAlertTime < 3000) return; // 冷卻時間 3 秒
+
+            let msg = null;
+            let isBad = false;
+
+            // 取得目前方位 (假設鏡頭看出去的方向就是該物件的方位)
+            const deg = currentHeading;
+
+            if (objKey === 'kitchen') {
+                // 火燒天門：廚房在西北 (292.5 ~ 337.5)
+                if (deg >= 292.5 && deg <= 337.5) {
+                    msg = "⚠️ 警告：火燒天門！\n廚房位於西北方，火剋金，大凶。";
+                    isBad = true;
+                }
+            } else if (objKey === 'toilet') {
+                // 鬼門：東北 (22.5~67.5) 或 西南 (202.5~247.5)
+                if ((deg >= 22.5 && deg <= 67.5) || (deg >= 202.5 && deg <= 247.5)) {
+                    msg = "⚠️ 警告：鬼門廁！\n廁所位於東北/西南，聚陰氣。";
+                    isBad = true;
+                } else if (deg >= 157.5 && deg <= 202.5) {
+                    msg = "⚠️ 提醒：水火相剋\n廁所位於南方(離宮)，屬火，容易引發眼疾或心血管問題。";
+                    isBad = true;
+                }
+            } else if (objKey === 'bed') {
+                // 簡單判斷：床頭朝西 (247.5 ~ 292.5)
+                // 注意：這裡是鏡頭看床，所以代表床在西方。如果要把邏輯改成「床頭朝向」，需要更複雜的判斷。
+                // 這裡先示範：床位在西方
+                if (deg >= 247.5 && deg <= 292.5) {
+                    msg = "✅ 床位：位於西方(兌宮)\n利求財與口才，適合業務。";
+                }
+            }
+
+            if (msg) {
+                showAlert(msg, isBad);
+                lastAlertTime = now;
+            }
+        }
+
+        function showAlert(text, isBad) {
+            const box = document.getElementById('alert-box');
+            const title = document.getElementById('alert-title');
+            const desc = document.getElementById('alert-desc');
+            
+            box.className = isBad ? '' : 'safe-box'; // 切換顏色
+            title.innerText = isBad ? "煞氣偵測" : "吉位偵測";
+            desc.innerText = text;
+            
+            box.style.display = 'block';
+            setTimeout(() => box.style.display = 'none', 3000);
+        }
+
+        function resizeCanvas() {
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+        }
+        
+        window.addEventListener('resize', resizeCanvas);
     </script>
 </body>
 </html>
