@@ -83,197 +83,200 @@
     </div>
 
     <script>
-        let model = null;
-        let isDetecting = false;
-        let currentHeading = 0;
-        let offset = 0;
-        let lastAlertTime = 0; // 避免警告一直跳
+    let model = null;
+    let currentHeading = 0;
+    let offset = 0;
+    let lastAlertTime = 0;
 
-        // 1. 初始化系統
-        async function initApp() {
-            const btn = document.getElementById('btn-start');
-            btn.disabled = true;
-            btn.innerText = "系統啟動中...";
+    // 除錯日誌功能
+    function debugLog(msg) {
+        console.log(msg);
+        // 如果您想在手機畫面上看到錯誤，可以取消下面這行的註解
+        // document.getElementById('status-text').innerText = msg;
+    }
 
-            // A. 啟動相機
+    // 1. 初始化系統 (必須由按鈕點擊觸發！)
+    async function initApp() {
+        const btn = document.getElementById('btn-start');
+        btn.disabled = true;
+        btn.innerText = "正在請求權限...";
+
+        // --- A. 強制請求羅盤權限 (iOS 關鍵步驟) ---
+        // 必須先請求權限，再處理相機與 AI
+        if (typeof DeviceOrientationEvent.requestPermission === 'function') {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: 'environment' }, 
-                    audio: false 
-                });
-                const video = document.getElementById('video');
-                video.srcObject = stream;
-                
-                // 等待影像載入完成再設定 Canvas 尺寸
-                video.onloadedmetadata = () => {
-                    video.play();
-                    resizeCanvas();
-                };
-            } catch (err) {
-                alert("相機啟動失敗: " + err);
-                return;
+                const permissionState = await DeviceOrientationEvent.requestPermission();
+                if (permissionState === 'granted') {
+                    window.addEventListener('deviceorientation', handleOrientation);
+                    debugLog("iOS 羅盤權限已取得");
+                } else {
+                    alert("⚠️ 權限被拒絕！請重新整理網頁，並務必點選「允許」。");
+                    btn.disabled = false;
+                    return;
+                }
+            } catch (error) {
+                console.error(error);
+                // 非 iOS 13+ 裝置會報錯，直接忽略，進入 Android 流程
             }
-
-            // B. 啟動羅盤
-            setupCompass();
-
-            // C. 載入 AI 模型
-            document.getElementById('ai-status').innerText = "下載模型中 (約 10MB)...";
-            try {
-                model = await cocoSsd.load();
-                document.getElementById('ai-status').innerText = "✅ AI 運作中";
-                btn.style.display = 'none'; // 隱藏按鈕
-                document.getElementById('status-text').innerText = "請將鏡頭對準：馬桶、瓦斯爐、床";
-                
-                // 開始偵測迴圈
-                detectFrame();
-            } catch (err) {
-                alert("模型載入失敗: " + err);
-                document.getElementById('ai-status').innerText = "❌ 模型錯誤";
-            }
-        }
-
-        // 2. 羅盤設定 (整合版)
-        function setupCompass() {
-            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission()
-                    .then(r => { if (r === 'granted') window.addEventListener('deviceorientation', handleOrientation); })
-                    .catch(console.error);
+        } else {
+            // Android 流程：嘗試兩種監聽模式
+            if ('ondeviceorientationabsolute' in window) {
+                window.addEventListener('deviceorientationabsolute', handleOrientation);
+                debugLog("使用 Android 絕對方位");
             } else {
                 window.addEventListener('deviceorientation', handleOrientation);
+                debugLog("使用標準方位事件");
             }
         }
 
-        function handleOrientation(e) {
-            let h = e.webkitCompassHeading || (e.alpha ? 360 - e.alpha : 0);
-            // 簡單平滑與校正
-            currentHeading = (h + offset + 360) % 360;
-            
-            document.getElementById('deg').innerText = Math.round(currentHeading) + "°";
-            document.getElementById('dir').innerText = getDirLabel(currentHeading);
-        }
-
-        function updateOffset(val) { offset = parseInt(val); }
-
-        function getDirLabel(deg) {
-            const dirs = ['北(坎)', '東北(艮)', '東(震)', '東南(巽)', '南(離)', '西南(坤)', '西(兌)', '西北(乾)'];
-            return dirs[Math.round(deg / 45) % 8];
-        }
-
-        // 3. AI 偵測迴圈
-        async function detectFrame() {
+        // --- B. 啟動相機 ---
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: 'environment' }
+            });
             const video = document.getElementById('video');
-            const canvas = document.getElementById('canvas');
-            const ctx = canvas.getContext('2d');
-
-            if (video.readyState === 4) { // 確認影像可用
-                const predictions = await model.detect(video);
-                
-                // 清空畫布
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-                predictions.forEach(prediction => {
-                    // 只過濾我們感興趣的風水物件
-                    const type = checkFengShuiObject(prediction.class);
-                    
-                    if (type && prediction.score > 0.6) {
-                        // 畫框框
-                        const [x, y, width, height] = prediction.bbox;
-                        ctx.strokeStyle = type.color;
-                        ctx.lineWidth = 4;
-                        ctx.strokeRect(x, y, width, height);
-
-                        // 畫文字
-                        ctx.fillStyle = type.color;
-                        ctx.font = '18px Arial';
-                        ctx.fillText(`${type.label} (${Math.round(prediction.score*100)}%)`, x, y > 10 ? y - 5 : 10);
-
-                        // 觸發風水判斷
-                        checkFengShuiLogic(type.key);
-                    }
-                });
-            }
-            requestAnimationFrame(detectFrame);
-        }
-
-        // 4. 定義風水物件與顏色
-        function checkFengShuiObject(className) {
-            // COCO-SSD 的類別名稱映射
-            const map = {
-                'toilet': { key: 'toilet', label: '🚽 馬桶 (穢氣)', color: '#FF00FF' }, // 洋紅色
-                'microwave': { key: 'kitchen', label: '🔥 廚房 (火氣)', color: '#FF4500' }, // 橘紅色
-                'oven': { key: 'kitchen', label: '🔥 廚房 (火氣)', color: '#FF4500' },
-                'refrigerator': { key: 'kitchen', label: '🔥 廚房 (財庫)', color: '#FF4500' },
-                'sink': { key: 'kitchen', label: '💧 水槽 (水氣)', color: '#00FFFF' },
-                'bed': { key: 'bed', label: '🛏️ 臥室 (安神)', color: '#00FF00' }, // 綠色
-                'couch': { key: 'bed', label: '🛋️ 沙發 (休息)', color: '#00FF00' } // 把沙發也視為休息區
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                video.play();
+                resizeCanvas();
             };
-            return map[className] || null;
+        } catch (err) {
+            alert("❌ 相機啟動失敗: " + err);
+            return;
         }
 
-        // 5. 風水吉凶邏輯核心
-        function checkFengShuiLogic(objKey) {
-            const now = Date.now();
-            if (now - lastAlertTime < 3000) return; // 冷卻時間 3 秒
+        // --- C. 載入 AI ---
+        document.getElementById('ai-status').innerText = "模型載入中...";
+        try {
+            model = await cocoSsd.load();
+            document.getElementById('ai-status').innerText = "✅ AI 運作中";
+            btn.style.display = 'none';
+            document.getElementById('status-text').innerText = "羅盤已啟動，請掃描環境";
+            detectFrame();
+        } catch (err) {
+            alert("AI 模型載入失敗");
+        }
+    }
 
-            let msg = null;
-            let isBad = false;
+    // 2. 羅盤處理核心 (相容性修正版)
+    function handleOrientation(event) {
+        let h = null;
 
-            // 取得目前方位 (假設鏡頭看出去的方向就是該物件的方位)
-            const deg = currentHeading;
+        // 優先順序 1: iOS 指南針
+        if (event.webkitCompassHeading) {
+            h = event.webkitCompassHeading;
+        } 
+        // 優先順序 2: Android 絕對方位 (absolute 為 true)
+        else if (event.absolute === true && event.alpha !== null) {
+            h = 360 - event.alpha;
+        }
+        // 優先順序 3: 普通 alpha (可能只是相對值，需要校正)
+        else if (event.alpha !== null) {
+            h = 360 - event.alpha;
+        }
 
-            if (objKey === 'kitchen') {
-                // 火燒天門：廚房在西北 (292.5 ~ 337.5)
-                if (deg >= 292.5 && deg <= 337.5) {
-                    msg = "⚠️ 警告：火燒天門！\n廚房位於西北方，火剋金，大凶。";
-                    isBad = true;
+        // 如果抓不到數值，就不更新
+        if (h === null) return;
+
+        // 計算與顯示
+        currentHeading = (h + offset + 360) % 360;
+        document.getElementById('deg').innerText = Math.round(currentHeading) + "°";
+        document.getElementById('dir').innerText = getDirLabel(currentHeading);
+    }
+
+    function updateOffset(val) { offset = parseInt(val); }
+
+    function getDirLabel(deg) {
+        const dirs = ['北(坎)', '東北(艮)', '東(震)', '東南(巽)', '南(離)', '西南(坤)', '西(兌)', '西北(乾)'];
+        return dirs[Math.round(deg / 45) % 8];
+    }
+
+    // 3. AI 偵測與繪圖 (維持原樣)
+    async function detectFrame() {
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        if (video.readyState === 4 && model) {
+            const predictions = await model.detect(video);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            predictions.forEach(prediction => {
+                const type = checkFengShuiObject(prediction.class);
+                if (type && prediction.score > 0.6) {
+                    const [x, y, width, height] = prediction.bbox;
+                    ctx.strokeStyle = type.color;
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(x, y, width, height);
+                    ctx.fillStyle = type.color;
+                    ctx.font = '18px Arial';
+                    ctx.fillText(`${type.label}`, x, y > 10 ? y - 5 : 10);
+                    checkFengShuiLogic(type.key);
                 }
-            } else if (objKey === 'toilet') {
-                // 鬼門：東北 (22.5~67.5) 或 西南 (202.5~247.5)
-                if ((deg >= 22.5 && deg <= 67.5) || (deg >= 202.5 && deg <= 247.5)) {
-                    msg = "⚠️ 警告：鬼門廁！\n廁所位於東北/西南，聚陰氣。";
-                    isBad = true;
-                } else if (deg >= 157.5 && deg <= 202.5) {
-                    msg = "⚠️ 提醒：水火相剋\n廁所位於南方(離宮)，屬火，容易引發眼疾或心血管問題。";
-                    isBad = true;
-                }
-            } else if (objKey === 'bed') {
-                // 簡單判斷：床頭朝西 (247.5 ~ 292.5)
-                // 注意：這裡是鏡頭看床，所以代表床在西方。如果要把邏輯改成「床頭朝向」，需要更複雜的判斷。
-                // 這裡先示範：床位在西方
-                if (deg >= 247.5 && deg <= 292.5) {
-                    msg = "✅ 床位：位於西方(兌宮)\n利求財與口才，適合業務。";
-                }
+            });
+        }
+        requestAnimationFrame(detectFrame);
+    }
+
+    function checkFengShuiObject(className) {
+        const map = {
+            'toilet': { key: 'toilet', label: '🚽 馬桶', color: '#FF00FF' },
+            'microwave': { key: 'kitchen', label: '🔥 廚房', color: '#FF4500' },
+            'oven': { key: 'kitchen', label: '🔥 廚房', color: '#FF4500' },
+            'refrigerator': { key: 'kitchen', label: '🔥 廚房', color: '#FF4500' },
+            'bed': { key: 'bed', label: '🛏️ 臥室', color: '#00FF00' },
+            'couch': { key: 'bed', label: '🛋️ 沙發', color: '#00FF00' }
+        };
+        return map[className] || null;
+    }
+
+    function checkFengShuiLogic(objKey) {
+        const now = Date.now();
+        if (now - lastAlertTime < 3000) return;
+
+        let msg = null;
+        let isBad = false;
+        const deg = currentHeading;
+
+        if (objKey === 'kitchen') {
+            if (deg >= 292.5 && deg <= 337.5) {
+                msg = "⚠️ 警告：火燒天門！(西北方)";
+                isBad = true;
             }
-
-            if (msg) {
-                showAlert(msg, isBad);
-                lastAlertTime = now;
+        } else if (objKey === 'toilet') {
+            if ((deg >= 22.5 && deg <= 67.5) || (deg >= 202.5 && deg <= 247.5)) {
+                msg = "⚠️ 警告：鬼門廁！(東北/西南)";
+                isBad = true;
             }
         }
 
-        function showAlert(text, isBad) {
-            const box = document.getElementById('alert-box');
-            const title = document.getElementById('alert-title');
-            const desc = document.getElementById('alert-desc');
-            
-            box.className = isBad ? '' : 'safe-box'; // 切換顏色
-            title.innerText = isBad ? "煞氣偵測" : "吉位偵測";
-            desc.innerText = text;
-            
-            box.style.display = 'block';
-            setTimeout(() => box.style.display = 'none', 3000);
+        if (msg) {
+            showAlert(msg, isBad);
+            lastAlertTime = now;
         }
+    }
 
-        function resizeCanvas() {
-            const video = document.getElementById('video');
-            const canvas = document.getElementById('canvas');
+    function showAlert(text, isBad) {
+        const box = document.getElementById('alert-box');
+        const title = document.getElementById('alert-title');
+        const desc = document.getElementById('alert-desc');
+        box.className = isBad ? '' : 'safe-box';
+        title.innerText = isBad ? "煞氣偵測" : "吉位偵測";
+        desc.innerText = text;
+        box.style.display = 'block';
+        setTimeout(() => box.style.display = 'none', 3000);
+    }
+
+    function resizeCanvas() {
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        if(video) {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
         }
-        
-        window.addEventListener('resize', resizeCanvas);
-    </script>
+    }
+    window.addEventListener('resize', resizeCanvas);
+</script>
 </body>
 </html>
  
