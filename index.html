@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Feng Shui Compass</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        #compass {
+            width: 300px;
+            height: 300px;
+            border: 5px solid #4CAF50;
+            border-radius: 50%;
+            position: relative;
+            overflow: hidden;
+            background: url('compass_background.png') no-repeat center center;
+            background-size: cover;
+        }
+        #needle {
+            width: 5px;
+            height: 140px;
+            background-color: red;
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform-origin: bottom;
+            transition: transform 0.1s ease;
+        }
+    </style>
+</head>
+<body>
+    <div id="compass">
+        <div id="needle"></div>
+    </div>
+    <script>
+        const needle = document.getElementById('needle');
+
+        function handleOrientation(event) {
+            const alpha = event.alpha; // degrees
+            needle.style.transform = `rotate(${-alpha}deg)`;
+        }
+
+        window.addEventListener('deviceorientation', handleOrientation, false);
+        
+        // Request camera permission for accessing device orientation
+        if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+            DeviceOrientationEvent.requestPermission()
+                .then(response => {
+                    if (response === 'granted') {
+                        window.addEventListener('deviceorientation', handleOrientation, false);
+                    }
+                })
+                .catch(console.error);
+        }
+    </script>
+</body>
+</html>
